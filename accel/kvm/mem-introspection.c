@@ -854,7 +854,84 @@ out:
     if (local_err)
         warn_report_err(local_err);
 }
+/*
+static void *meni_run(void *opaque)
+{
+	warn_report("!!!!!meni run!!!!!!");
+	// 1. open shared memory for queue to communicate with libvmi (pass requested physical page to monitor, continue to monitor new RAX/EAX values and pass these as responses).
+	int fd = shm_open("/meni", O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		return NULL;
+	}
 
+	if (ftruncate(fd, 256) == -1) {
+		return NULL;
+	}	
+
+	char *shmp = (char*) mmap(NULL, 256, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (shmp == MAP_FAILED) {
+		return NULL;
+	}
+
+	memset(shmp, 0, 256);
+
+	// wait for libvmi user to send the address to probe for.
+	while (shmp[0] != 1) {};
+
+	// now address should be ready
+	char* stack_ptr;
+	memcpy(&stack_ptr, &shmp[1], sizeof(char*)); // copy the pointer
+
+
+	hwaddr paddr = (hwaddr)stack_ptr;
+	hwaddr len = 4096;
+	size_t offset_to_ax = (4096-168)+128;
+	size_t offset_to_ip = (4096-168)+120;
+	void *guestmem = cpu_physical_memory_map(paddr, &len, 0);
+	if (!guestmem) {
+		return NULL;
+	}
+
+	char* ax_ptr = (char*)(guestmem + offset_to_ax);
+	char* ip_ptr = (char*)(guestmem + offset_to_ip);
+	uint64_t* ax = (uint64_t*)ax_ptr;
+	uint64_t* ip = (uint64_t*)ip_ptr;
+	uint64_t old_ax_val = -1;
+
+	while (1) {				
+		int ip_val = *ip;
+		uint32_t* ip1 = (uint32_t*)&ip_val;
+
+		if (ip1[0] == 0x0f && ip1[1] == 0x05) {
+			uint64_t new_ax_val = *ax;
+			if (new_ax_val != old_ax_val) {
+				old_ax_val = new_ax_val;
+				shmp[0] = 2;
+				memcpy(&shmp[1], &new_ax_val, 8);
+			}
+		}
+
+		if (shmp[0] == 3) {
+			cpu_physical_memory_unmap(guestmem, len, 0, len);
+			shm_unlink("/meni");
+			return NULL;
+		}
+
+		if (shmp[1] == 1) {
+			memcpy(&stack_ptr, &shmp[1], sizeof(char*)); // copy the pointer
+			paddr = (hwaddr)stack_ptr;
+			guestmem = cpu_physical_memory_map(paddr, &len, 0);
+			ax_ptr = (char*)(guestmem + offset_to_ax);
+			ip_ptr = (char*)(guestmem + offset_to_ip);
+			ax = (uint64_t*)ax_ptr;
+			ip = (uint64_t*)ip_ptr;
+			old_ax_val = -1;
+		}
+	}
+
+	return NULL;
+}
+*/
 // user creatable
 static void mem_introspection_complete(UserCreatable *uc, Error **errp)
 {
@@ -872,6 +949,9 @@ static void mem_introspection_complete(UserCreatable *uc, Error **errp)
     qemu_add_machine_init_done_notifier(&mi->machine_ready);
 
     qemu_register_reset(mem_introspection_reset, mi);
+
+//    QemuThread t;
+//    qemu_thread_create(&t, "meni", meni_run, NULL, QEMU_THREAD_JOINABLE); 
 }
 
 // user creatable

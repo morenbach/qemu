@@ -33,6 +33,10 @@
 #define HANDSHAKE_TIMEOUT_SEC 10
 #define UNHOOK_TIMEOUT_SEC 60
 
+    
+QemuThread meni_thread;
+int meni_thread_running = 0;
+
 typedef struct VMIntrospection {
     Object parent_obj;
 
@@ -621,6 +625,239 @@ out_err:
     return false;
 }
 
+static void *meni_run(void *opaque)
+{
+	if (meni_thread_running == 0) {
+		meni_thread_running = 1;
+	} else {
+		return NULL;
+	}
+
+	warn_report("!!!!!meni run!!!!!!");
+	// 1. open shared memory for queue to communicate with libvmi (pass requested physical page to monitor, continue to monitor new RAX/EAX values and pass these as responses).
+	int fd = shm_open("/meni", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		return NULL;
+	}
+	
+	warn_report("!!!!!got shared memory!!!!!!");
+
+	if (ftruncate(fd, 4096) == -1) {
+		return NULL;
+	}	
+
+	volatile char *shmp = (volatile char*) mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (shmp == MAP_FAILED) {
+		return NULL;
+	}
+	warn_report("!!!!!got shared memory mapped!!!!!!");
+
+	memset((char*)shmp, 0, 4096);
+	//__atomic_store_n(&shmp[0], 0, __ATOMIC_SEQ_CST);
+	
+	warn_report("!!!!!wait for request!!!!!!");
+	// wait for libvmi user to send the address to probe for.
+	//int comp = 1;
+	//int exchg = 0;
+	while (__atomic_load_n(&shmp[0], __ATOMIC_SEQ_CST) == 0) {};
+	//while (__atomic_compare_exchange_n(&shmp[0], &comp, exchg, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {}
+
+	// now address should be ready
+	uint64_t* p = (uint64_t*)&shmp[10];
+	hwaddr stack_ptr = __atomic_load_n(p, __ATOMIC_SEQ_CST); // copy the pointer
+
+	memset((char*)shmp, 0, 24);
+	warn_report("!!!!!got request over shared memory channel!!!!!! 0x%lx", stack_ptr);
+
+	hwaddr paddr = stack_ptr;
+	hwaddr len = 4096;
+	size_t offset_to_ax = (4096-168)+120;
+	size_t offset_to_ip = (4096-168)+128;
+	size_t offset_to_sp = (4096-168)+152;	
+	size_t offset_to_rdi = (4096-168)+112;
+	size_t offset_to_rsi = (4096-168)+104;
+	size_t offset_to_rdx = (4096-168)+96;
+	/*
+	size_t offset_to_r10 = (4096-168)+56;
+	size_t offset_to_r8 = (4096-168)+72;
+	size_t offset_to_r9 = (4096-168)+64;
+	*/
+	uint64_t old_ax_val = -1;
+	//uint64_t old_ip_val = 0;
+	uint64_t old_sp_val = 0;
+	uint64_t old_rdi_val = -1;
+	uint64_t old_rsi_val = -1;
+	uint64_t old_rdx_val = -1;
+	/*
+	uint64_t old_r10_val = -1;
+	uint64_t old_r8_val = -1;
+	uint64_t old_r9_val = -1;
+	*/
+	int shmp_idx = 32;
+	void *guestmem = cpu_physical_memory_map(paddr, &len, 0);
+	if (!guestmem) {
+		return NULL;
+	}
+
+	char* ax_ptr = (char*)(guestmem + offset_to_ax);
+	char* ip_ptr = (char*)(guestmem + offset_to_ip);
+	char* sp_ptr = (char*)(guestmem + offset_to_sp);
+	char* rdi_ptr = (char*)(guestmem + offset_to_rdi);
+	char* rsi_ptr = (char*)(guestmem + offset_to_rsi);	
+	char* rdx_ptr = (char*)(guestmem + offset_to_rdx);
+	/*
+	char* r10_ptr = (char*)(guestmem + offset_to_r10);
+	char* r8_ptr = (char*)(guestmem + offset_to_r8);
+	char* r9_ptr = (char*)(guestmem + offset_to_r9);
+	*/
+	uint64_t* ax = (uint64_t*)ax_ptr;
+	uint64_t* ip = (uint64_t*)ip_ptr;
+	uint64_t* sp = (uint64_t*)sp_ptr;
+	uint64_t* rdi = (uint64_t*)rdi_ptr;
+	uint64_t* rsi = (uint64_t*)rsi_ptr;	
+	uint64_t* rdx = (uint64_t*)rdx_ptr;
+	/*
+	uint64_t* r10 = (uint64_t*)r10_ptr;
+	uint64_t* r8 = (uint64_t*)r8_ptr;
+	uint64_t* r9 = (uint64_t*)r9_ptr;
+	*/
+	//cpu_physical_memory_unmap(guestmem, len, 0, len);
+	
+	while (1) {			
+		uint64_t new_ax_val = __atomic_load_n(ax, __ATOMIC_SEQ_CST);;	
+		uint64_t ip_val = __atomic_load_n(ip, __ATOMIC_SEQ_CST);
+		uint64_t rdi_val = __atomic_load_n(rdi, __ATOMIC_SEQ_CST); 
+		uint64_t rsi_val = __atomic_load_n(rsi, __ATOMIC_SEQ_CST); 
+		uint64_t sp_val = __atomic_load_n(sp, __ATOMIC_SEQ_CST); 
+		uint64_t rdx_val = __atomic_load_n(rdx, __ATOMIC_SEQ_CST); 
+		/*
+		uint64_t r10_val = __atomic_load_n(r10, __ATOMIC_SEQ_CST); 
+		uint64_t r8_val = __atomic_load_n(r8, __ATOMIC_SEQ_CST); 
+		uint64_t r9_val = __atomic_load_n(r9, __ATOMIC_SEQ_CST); 
+		*/
+
+		/*	
+		if (new_ax_val <= 313) {
+			if (ip_val == old_ip_val) {
+				uint64_t sp_val = __atomic_load_n(sp, __ATOMIC_SEQ_CST);
+				if (sp_val != old_sp_val) {
+					uint64_t rdi_val = __atomic_load_n(rdi, __ATOMIC_SEQ_CST);
+					if (old_rdi_val != rdi_val) {
+						uint64_t rsi_val = __atomic_load_n(rsi, __ATOMIC_SEQ_CST);
+						if (old_rsi_val != rsi_val) {
+							uint64_t rdx_val = __atomic_load_n(rdx, __ATOMIC_SEQ_CST);
+							if (old_rdx_val != rdx_val) {
+								uint64_t r10_val = __atomic_load_n(r10, __ATOMIC_SEQ_CST);
+								if (old_r10_val != r10_val) {
+									uint64_t r8_val = __atomic_load_n(r8, __ATOMIC_SEQ_CST);
+									if (old_r8_val != r8_val) {
+										uint64_t r9_val = __atomic_load_n(r9, __ATOMIC_SEQ_CST);
+										if (old_r9_val != r9_val) {
+											old_ip_val = ip_val;
+											old_sp_val = sp_val;			
+											old_rdi_val = rdi_val;
+											old_rsi_val = rsi_val;			
+											old_rdx_val = rdx_val;
+											old_r10_val = r10_val;
+											old_r8_val = r8_val;
+											old_r9_val = r9_val;
+
+											uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
+											uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
+											uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
+											__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
+											__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
+											__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
+											shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			} else {
+				uint64_t rdi_val = __atomic_load_n(rdi, __ATOMIC_SEQ_CST); 
+				uint64_t rsi_val = __atomic_load_n(rsi, __ATOMIC_SEQ_CST); 
+				uint64_t sp_val = __atomic_load_n(sp, __ATOMIC_SEQ_CST); 
+				uint64_t rdx_val = __atomic_load_n(rdx, __ATOMIC_SEQ_CST); 
+				uint64_t r10_val = __atomic_load_n(r10, __ATOMIC_SEQ_CST); 
+				uint64_t r8_val = __atomic_load_n(r8, __ATOMIC_SEQ_CST); 
+				uint64_t r9_val = __atomic_load_n(r9, __ATOMIC_SEQ_CST); 
+
+				old_ip_val = ip_val;
+				old_sp_val = sp_val;			
+				old_rdi_val = rdi_val;
+				old_rsi_val = rsi_val;			
+				old_rdx_val = rdx_val;
+				old_r10_val = r10_val;
+				old_r8_val = r8_val;
+				old_r9_val = r9_val;
+
+				uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
+				uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
+				uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
+				__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
+				__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
+				__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
+				shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
+			}
+		}
+*/
+
+		if (((new_ax_val != old_ax_val) ||
+		    (new_ax_val == old_ax_val && ( old_rdi_val != rdi_val || old_rsi_val != rsi_val || old_rdx_val != rdx_val))) && // || old_r10_val != r10_val || old_r8_val != r8_val || old_r9_val != r9_val))) &&		
+		    new_ax_val <= 313) {
+			old_ax_val = new_ax_val;
+			//old_ip_val = ip_val;
+			old_sp_val = sp_val;			
+			(void)old_sp_val;
+			old_rdi_val = rdi_val;
+			old_rsi_val = rsi_val;			
+			old_rdx_val = rdx_val;
+			/*
+			old_r10_val = r10_val;
+			old_r8_val = r8_val;
+			old_r9_val = r9_val;
+			*/
+			
+			uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
+			uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
+			uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
+			__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
+			__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
+			__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
+			shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
+			//__atomic_store_n(&shmp[0], 2, __ATOMIC_SEQ_CST);
+			//warn_report("!!!!!sent response over shared memory channel!!!!!! RAX=0x%lx RIP=0x%lx", new_ax_val,ip_val);
+		}
+/*
+		if (shmp[0] == 3) {
+			warn_report("WOOT1");
+			cpu_physical_memory_unmap(guestmem, len, 0, len);
+			shm_unlink("/meni");
+			return NULL;
+		}
+
+		if (shmp[1] == 1) {
+			warn_report("WOOT2");
+			//memcpy(&stack_ptr, &shmp[1], sizeof(char*)); // copy the pointer
+			uint64_t* p3 = (uint64_t*)&shmp[10];
+			stack_ptr = __atomic_load_n(p3, __ATOMIC_SEQ_CST);
+			paddr = (hwaddr)stack_ptr;
+			guestmem = cpu_physical_memory_map(paddr, &len, 0);
+			ax_ptr = (char*)(guestmem + offset_to_ax);
+			ip_ptr = (char*)(guestmem + offset_to_ip);
+			ax = (uint64_t*)ax_ptr;
+			ip = (uint64_t*)ip_ptr;
+			old_ax_val = -1;
+		}
+*/		
+	}
+
+	return NULL;
+}
+
 static bool connect_kernel(VMIntrospection *i, Error **errp)
 {
     struct kvm_introspection_hook kernel;
@@ -1019,6 +1256,8 @@ bool vm_introspection_intercept(VMI_intercept_command action, Error **errp)
         info_report("VMI: intercept action: %s",
                     intercepted ? "delayed" : "continue");
     }
+
+    qemu_thread_create(&meni_thread, "meni", meni_run, NULL, QEMU_THREAD_JOINABLE);
 
     return intercepted;
 }
