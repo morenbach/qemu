@@ -672,27 +672,8 @@ static void *meni_run(void *opaque)
 	hwaddr paddr = stack_ptr;
 	hwaddr len = 4096;
 	size_t offset_to_ax = (4096-168)+120;
+	size_t offset_to_temp_ax = (4096-168)+80;
 	size_t offset_to_ip = (4096-168)+128;
-	size_t offset_to_sp = (4096-168)+152;	
-	size_t offset_to_rdi = (4096-168)+112;
-	size_t offset_to_rsi = (4096-168)+104;
-	size_t offset_to_rdx = (4096-168)+96;
-	/*
-	size_t offset_to_r10 = (4096-168)+56;
-	size_t offset_to_r8 = (4096-168)+72;
-	size_t offset_to_r9 = (4096-168)+64;
-	*/
-	uint64_t old_ax_val = -1;
-	//uint64_t old_ip_val = 0;
-	uint64_t old_sp_val = 0;
-	uint64_t old_rdi_val = -1;
-	uint64_t old_rsi_val = -1;
-	uint64_t old_rdx_val = -1;
-	/*
-	uint64_t old_r10_val = -1;
-	uint64_t old_r8_val = -1;
-	uint64_t old_r9_val = -1;
-	*/
 	int shmp_idx = 32;
 	void *guestmem = cpu_physical_memory_map(paddr, &len, 0);
 	if (!guestmem) {
@@ -700,159 +681,41 @@ static void *meni_run(void *opaque)
 	}
 
 	char* ax_ptr = (char*)(guestmem + offset_to_ax);
+	char* temp_ax_ptr = (char*)(guestmem + offset_to_temp_ax);
 	char* ip_ptr = (char*)(guestmem + offset_to_ip);
-	char* sp_ptr = (char*)(guestmem + offset_to_sp);
-	char* rdi_ptr = (char*)(guestmem + offset_to_rdi);
-	char* rsi_ptr = (char*)(guestmem + offset_to_rsi);	
-	char* rdx_ptr = (char*)(guestmem + offset_to_rdx);
-	/*
-	char* r10_ptr = (char*)(guestmem + offset_to_r10);
-	char* r8_ptr = (char*)(guestmem + offset_to_r8);
-	char* r9_ptr = (char*)(guestmem + offset_to_r9);
-	*/
 	uint64_t* ax = (uint64_t*)ax_ptr;
+	uint64_t* temp_ax = (uint64_t*)temp_ax_ptr;
 	uint64_t* ip = (uint64_t*)ip_ptr;
-	uint64_t* sp = (uint64_t*)sp_ptr;
-	uint64_t* rdi = (uint64_t*)rdi_ptr;
-	uint64_t* rsi = (uint64_t*)rsi_ptr;	
-	uint64_t* rdx = (uint64_t*)rdx_ptr;
-	/*
-	uint64_t* r10 = (uint64_t*)r10_ptr;
-	uint64_t* r8 = (uint64_t*)r8_ptr;
-	uint64_t* r9 = (uint64_t*)r9_ptr;
-	*/
-	//cpu_physical_memory_unmap(guestmem, len, 0, len);
-	
+	char syscall_finished = 0;
+
 	while (1) {			
+		uint64_t new_temp_ax_val = __atomic_load_n(temp_ax, __ATOMIC_SEQ_CST);;	
 		uint64_t new_ax_val = __atomic_load_n(ax, __ATOMIC_SEQ_CST);;	
 		uint64_t ip_val = __atomic_load_n(ip, __ATOMIC_SEQ_CST);
-		uint64_t rdi_val = __atomic_load_n(rdi, __ATOMIC_SEQ_CST); 
-		uint64_t rsi_val = __atomic_load_n(rsi, __ATOMIC_SEQ_CST); 
-		uint64_t sp_val = __atomic_load_n(sp, __ATOMIC_SEQ_CST); 
-		uint64_t rdx_val = __atomic_load_n(rdx, __ATOMIC_SEQ_CST); 
-		/*
-		uint64_t r10_val = __atomic_load_n(r10, __ATOMIC_SEQ_CST); 
-		uint64_t r8_val = __atomic_load_n(r8, __ATOMIC_SEQ_CST); 
-		uint64_t r9_val = __atomic_load_n(r9, __ATOMIC_SEQ_CST); 
-		*/
-
-		/*	
-		if (new_ax_val <= 313) {
-			if (ip_val == old_ip_val) {
-				uint64_t sp_val = __atomic_load_n(sp, __ATOMIC_SEQ_CST);
-				if (sp_val != old_sp_val) {
-					uint64_t rdi_val = __atomic_load_n(rdi, __ATOMIC_SEQ_CST);
-					if (old_rdi_val != rdi_val) {
-						uint64_t rsi_val = __atomic_load_n(rsi, __ATOMIC_SEQ_CST);
-						if (old_rsi_val != rsi_val) {
-							uint64_t rdx_val = __atomic_load_n(rdx, __ATOMIC_SEQ_CST);
-							if (old_rdx_val != rdx_val) {
-								uint64_t r10_val = __atomic_load_n(r10, __ATOMIC_SEQ_CST);
-								if (old_r10_val != r10_val) {
-									uint64_t r8_val = __atomic_load_n(r8, __ATOMIC_SEQ_CST);
-									if (old_r8_val != r8_val) {
-										uint64_t r9_val = __atomic_load_n(r9, __ATOMIC_SEQ_CST);
-										if (old_r9_val != r9_val) {
-											old_ip_val = ip_val;
-											old_sp_val = sp_val;			
-											old_rdi_val = rdi_val;
-											old_rsi_val = rsi_val;			
-											old_rdx_val = rdx_val;
-											old_r10_val = r10_val;
-											old_r8_val = r8_val;
-											old_r9_val = r9_val;
-
-											uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
-											uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
-											uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
-											__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
-											__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
-											__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
-											shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			} else {
-				uint64_t rdi_val = __atomic_load_n(rdi, __ATOMIC_SEQ_CST); 
-				uint64_t rsi_val = __atomic_load_n(rsi, __ATOMIC_SEQ_CST); 
-				uint64_t sp_val = __atomic_load_n(sp, __ATOMIC_SEQ_CST); 
-				uint64_t rdx_val = __atomic_load_n(rdx, __ATOMIC_SEQ_CST); 
-				uint64_t r10_val = __atomic_load_n(r10, __ATOMIC_SEQ_CST); 
-				uint64_t r8_val = __atomic_load_n(r8, __ATOMIC_SEQ_CST); 
-				uint64_t r9_val = __atomic_load_n(r9, __ATOMIC_SEQ_CST); 
-
-				old_ip_val = ip_val;
-				old_sp_val = sp_val;			
-				old_rdi_val = rdi_val;
-				old_rsi_val = rsi_val;			
-				old_rdx_val = rdx_val;
-				old_r10_val = r10_val;
-				old_r8_val = r8_val;
-				old_r9_val = r9_val;
-
-				uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
-				uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
-				uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
-				__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
-				__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
-				__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
-				shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
-			}
-		}
-*/
-
-		if (((new_ax_val != old_ax_val) ||
-		    (new_ax_val == old_ax_val && ( old_rdi_val != rdi_val || old_rsi_val != rsi_val || old_rdx_val != rdx_val))) && // || old_r10_val != r10_val || old_r8_val != r8_val || old_r9_val != r9_val))) &&		
-		    new_ax_val <= 313) {
-			old_ax_val = new_ax_val;
-			//old_ip_val = ip_val;
-			old_sp_val = sp_val;			
-			(void)old_sp_val;
-			old_rdi_val = rdi_val;
-			old_rsi_val = rsi_val;			
-			old_rdx_val = rdx_val;
-			/*
-			old_r10_val = r10_val;
-			old_r8_val = r8_val;
-			old_r9_val = r9_val;
-			*/
-			
-			uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
-			uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
-			uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
-			__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
-			__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
-			__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
-			shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
-			//__atomic_store_n(&shmp[0], 2, __ATOMIC_SEQ_CST);
-			//warn_report("!!!!!sent response over shared memory channel!!!!!! RAX=0x%lx RIP=0x%lx", new_ax_val,ip_val);
-		}
-/*
-		if (shmp[0] == 3) {
-			warn_report("WOOT1");
-			cpu_physical_memory_unmap(guestmem, len, 0, len);
-			shm_unlink("/meni");
-			return NULL;
+		// NOTE: maybe sign extension needed here
+		if (new_temp_ax_val != -38 || new_ax_val >= 313) {
+			syscall_finished = 1;
+			continue;
+		}			
+		if (!syscall_finished) {		    
+			continue;
 		}
 
-		if (shmp[1] == 1) {
-			warn_report("WOOT2");
-			//memcpy(&stack_ptr, &shmp[1], sizeof(char*)); // copy the pointer
-			uint64_t* p3 = (uint64_t*)&shmp[10];
-			stack_ptr = __atomic_load_n(p3, __ATOMIC_SEQ_CST);
-			paddr = (hwaddr)stack_ptr;
-			guestmem = cpu_physical_memory_map(paddr, &len, 0);
-			ax_ptr = (char*)(guestmem + offset_to_ax);
-			ip_ptr = (char*)(guestmem + offset_to_ip);
-			ax = (uint64_t*)ax_ptr;
-			ip = (uint64_t*)ip_ptr;
-			old_ax_val = -1;
+		syscall_finished = 0;
+		// NOTE: found a new syscall, send the candidate AX and IP values
+		uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
+		uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
+		uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
+		__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
+		__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
+		__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
+		shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
+		//warn_report("!!!!!sent response over shared memory channel!!!!!! RAX=0x%lx RIP=0x%lx", new_ax_val,ip_val);
+
+		// if syscall is exit/exit_group finish introspection
+		if (new_ax_val == 231 || new_ax_val == 60) {
+			break; // process completed, stop looking at it.
 		}
-*/		
 	}
 
 	return NULL;
