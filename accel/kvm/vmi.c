@@ -34,8 +34,8 @@
 #define UNHOOK_TIMEOUT_SEC 60
 
     
-QemuThread meni_thread;
-int meni_thread_running = 0;
+QemuThread syscall_thread;
+int syscall_thread_running = 0;
 
 typedef struct VMIntrospection {
     Object parent_obj;
@@ -625,23 +625,21 @@ out_err:
     return false;
 }
 
-static void *meni_run(void *opaque)
+static void *syscall_run(void *opaque)
 {
-	if (meni_thread_running == 0) {
-		meni_thread_running = 1;
+	if (syscall_thread_running == 0) {
+		syscall_thread_running = 1;
 	} else {
 		return NULL;
 	}
 
-	warn_report("!!!!!meni run!!!!!!");
+	warn_report("====syscall polling thread is running====");
 	// 1. open shared memory for queue to communicate with libvmi (pass requested physical page to monitor, continue to monitor new RAX/EAX values and pass these as responses).
-	int fd = shm_open("/meni", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+	int fd = shm_open("/syscall_poller", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
 		return NULL;
 	}
 	
-	warn_report("!!!!!got shared memory!!!!!!");
-
 	if (ftruncate(fd, 8192) == -1) {
 		return NULL;
 	}	
@@ -650,14 +648,14 @@ static void *meni_run(void *opaque)
 	if (shmp == MAP_FAILED) {
 		return NULL;
 	}
-	warn_report("!!!!!got shared memory mapped!!!!!!");
+	//warn_report("!!!!!got shared memory mapped!!!!!!");
 
 while (1) {
 
 	memset((char*)shmp+4096, 0, 4096);
 	//__atomic_store_n(&shmp[0], 0, __ATOMIC_SEQ_CST);
 	
-	warn_report("!!!!!wait for request!!!!!!");
+	//warn_report("!!!!!wait for request!!!!!!");
 	// wait for libvmi user to send the address to probe for.
 	//int comp = 1;
 	//int exchg = 0;
@@ -675,7 +673,7 @@ while (1) {
 
 	}
 	//memset((char*)shmp, 0, 24);
-	warn_report("!!!!!got request over shared memory channel!!!!!! 0x%lx", stack_ptr);
+	//warn_report("!!!!!got request over shared memory channel!!!!!! 0x%lx", stack_ptr);
 
 	hwaddr paddr = stack_ptr;
 	hwaddr len = 4096;
@@ -1144,7 +1142,7 @@ bool vm_introspection_intercept(VMI_intercept_command action, Error **errp)
                     intercepted ? "delayed" : "continue");
     }
 
-    qemu_thread_create(&meni_thread, "meni", meni_run, NULL, QEMU_THREAD_JOINABLE);
+    qemu_thread_create(&syscall_thread, "syscall_poll", syscall_run, NULL, QEMU_THREAD_JOINABLE);
 
     return intercepted;
 }
