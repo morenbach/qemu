@@ -642,31 +642,39 @@ static void *meni_run(void *opaque)
 	
 	warn_report("!!!!!got shared memory!!!!!!");
 
-	if (ftruncate(fd, 4096) == -1) {
+	if (ftruncate(fd, 8192) == -1) {
 		return NULL;
 	}	
 
-	volatile char *shmp = (volatile char*) mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	volatile char *shmp = (volatile char*) mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (shmp == MAP_FAILED) {
 		return NULL;
 	}
 	warn_report("!!!!!got shared memory mapped!!!!!!");
 
-	memset((char*)shmp, 0, 4096);
+while (1) {
+
+	memset((char*)shmp+4096, 0, 4096);
 	//__atomic_store_n(&shmp[0], 0, __ATOMIC_SEQ_CST);
 	
 	warn_report("!!!!!wait for request!!!!!!");
 	// wait for libvmi user to send the address to probe for.
 	//int comp = 1;
 	//int exchg = 0;
-	while (__atomic_load_n(&shmp[0], __ATOMIC_SEQ_CST) == 0) {};
+	while (__atomic_load_n(&shmp[4096], __ATOMIC_SEQ_CST) == 0) {};
 	//while (__atomic_compare_exchange_n(&shmp[0], &comp, exchg, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {}
 
 	// now address should be ready
-	uint64_t* p = (uint64_t*)&shmp[10];
+	uint64_t* p = (uint64_t*)&shmp[5006];
 	hwaddr stack_ptr = __atomic_load_n(p, __ATOMIC_SEQ_CST); // copy the pointer
 
-	memset((char*)shmp, 0, 24);
+	//memset((char*)shmp, 0, 4096);
+	uint64_t* ptr = (uint64_t*)shmp;
+	for (int i=0;i<4096/sizeof(uint64_t);i++) {
+		ptr[i] = 1000L;
+
+	}
+	//memset((char*)shmp, 0, 24);
 	warn_report("!!!!!got request over shared memory channel!!!!!! 0x%lx", stack_ptr);
 
 	hwaddr paddr = stack_ptr;
@@ -686,37 +694,53 @@ static void *meni_run(void *opaque)
 	uint64_t* ax = (uint64_t*)ax_ptr;
 	uint64_t* temp_ax = (uint64_t*)temp_ax_ptr;
 	uint64_t* ip = (uint64_t*)ip_ptr;
-	char syscall_finished = 0;
+	char syscall_processed = 0;
+
+	(void)ip;
 
 	while (1) {			
 		uint64_t new_temp_ax_val = __atomic_load_n(temp_ax, __ATOMIC_SEQ_CST);;	
 		uint64_t new_ax_val = __atomic_load_n(ax, __ATOMIC_SEQ_CST);;	
-		uint64_t ip_val = __atomic_load_n(ip, __ATOMIC_SEQ_CST);
+		//uint64_t ip_val = __atomic_load_n(ip, __ATOMIC_SEQ_CST);
 		// NOTE: maybe sign extension needed here
-		if (new_temp_ax_val != -38 || new_ax_val >= 313) {
-			syscall_finished = 1;
-			continue;
-		}			
-		if (!syscall_finished) {		    
-			continue;
-		}
+		if (new_temp_ax_val == -38) {
+			if (new_ax_val >= 450) {
+				// noise, ignore it
+			 	__asm volatile ("pause" ::: );
+				continue;
+			}
 
-		syscall_finished = 0;
-		// NOTE: found a new syscall, send the candidate AX and IP values
-		uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
-		uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
-		uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
-		__atomic_store_n(p1, new_ax_val, __ATOMIC_SEQ_CST);
-		__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
-		__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
-		shmp_idx = ((shmp_idx+32) & 0xFFF);//4096;
-		//warn_report("!!!!!sent response over shared memory channel!!!!!! RAX=0x%lx RIP=0x%lx", new_ax_val,ip_val);
+			if (syscall_processed) {
+				 __asm volatile ("pause" ::: );
+				continue;
+			}
 
-		// if syscall is exit/exit_group finish introspection
-		if (new_ax_val == 231 || new_ax_val == 60) {
-			break; // process completed, stop looking at it.
-		}
+			syscall_processed = 1;
+			// DO WORK
+			//
+			// NOTE: found a new syscall, send the candidate AX and IP values
+			uint64_t* p0 = (uint64_t*)&shmp[shmp_idx];
+			//uint64_t* p1 = (uint64_t*)&shmp[(shmp_idx+8)];
+			//uint64_t* p2 = (uint64_t*)&shmp[(shmp_idx+16)];
+			__atomic_store_n(p0, new_ax_val, __ATOMIC_SEQ_CST);
+			//__atomic_store_n(p2, ip_val, __ATOMIC_SEQ_CST);
+			//__atomic_store_n(p0, 1, __ATOMIC_SEQ_CST);
+			shmp_idx = ((shmp_idx+8) & 0xFFF);//4096;
+			//warn_report("!!!!!sent response over shared memory channel!!!!!! RAX=0x%lx RIP=0x%lx", new_ax_val,ip_val);
+
+			// if syscall is exit/exit_group finish introspection
+			if (new_ax_val == 231 || new_ax_val == 60) {
+				break; // process completed, stop looking at it.
+			}
+
+			continue;		
+		}		
+
+		// syscall finished, set next one to be processed and continue
+		syscall_processed = 0;
+		__asm volatile ("pause" ::: );
 	}
+}
 
 	return NULL;
 }
